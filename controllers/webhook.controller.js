@@ -1,49 +1,43 @@
-const pool = require("../db/conn");
+const webhookQueue = require('../queues/webhook.queue');
 
 const receiveWebhook = async (req, res) => {
   try {
     const event = req.stripeEvent;
 
-    const result = await pool.query(
-      `INSERT INTO webhook_events (
-        provider,
-        provider_event_id,
-        event_type,
-        request_id,
-        raw_payload
-      )
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (provider, provider_event_id)
-        DO NOTHING
-        RETURNING id`,
-        [
-          'stripe',
-          event.id,
-          event.type,
-          req.requestId,
-          event
-        ]
-    )
-
-    if(result.rows.length === 0){
-      console.log(
-        `[${req.requestId}] Duplicate Stripe Event: ${event.id}`
-      );
-      return res.status(200).json({
-        message: 'Webhook already processed',
-        requestId: req.requestId,
-        eventId: event.id
-      });
-    }
-
     console.log(
-      `[${req.requestId}] Webhook saved: ${result.rows[0].id}`
+      `[${req.requestId}] Stripe Event verified`
     );
 
-    res.status(200).json({
-      message: 'Webhook verified and saved',
+    console.log(
+      `[${req.requestId}] Event ID: ${event.id}`
+    );
+
+    console.log(
+      `[${req.requestId}] Event Type: ${event.type}`
+    );
+
+    const job = await webhookQueue.add(
+      'process-webhook',
+      {
+        provider: 'stripe',
+        eventId: event.id,
+        eventType: event.type,
+        requestId: req.requestId,
+        payload: event
+      },
+      {
+        jobId: `stripe-${event.id}`
+      }
+    );
+
+    console.log(
+      `[${req.requestId}] Webhook queued. Job ID: ${job.id}`
+    );
+
+    return res.status(200).json({
+      message: 'Webhook accepted',
       requestId: req.requestId,
-      webhookId: result.rows[0].id,
+      jobId: job.id,
       eventId: event.id,
       eventType: event.type
     });
@@ -54,7 +48,7 @@ const receiveWebhook = async (req, res) => {
       error.message
     );
 
-    res.status(500).json({
+    return res.status(500).json({
       message: 'Webhook processing failed'
     });
   }
